@@ -32,6 +32,7 @@ ESP32 GND           ────  FC GND
 ```bash
 esptool --chip esp32 --port /dev/cu.usbserial-XXXX --baud 460800 \
   write_flash -z 0x0 DroneFlasher.bin
+cu.usbserial-XXXX - ХХХХ - вказати номер порта
 ```
 
 Або через OTA: `http://10.0.0.1/ota`
