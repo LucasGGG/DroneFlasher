@@ -1,0 +1,18 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Build outputs
+DroneFlasher/build/
+DroneFlasherS3/build/
+*.merged.bin
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Arduino cache
+*.cache/
