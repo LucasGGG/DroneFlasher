@@ -25,10 +25,11 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
-#include <SPIFFS.h>
+#include <FFat.h>
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
 #include <Update.h>
+#include <Adafruit_NeoPixel.h>
 
 extern "C" {
 #include "usb/usb_host.h"
@@ -40,8 +41,20 @@ extern "C" {
 static const char* AP_SSID = "CONFIG";
 static const char* AP_PASS = "freeAzov";
 
-// ── LED ───────────────────────────────────────────────────────────────────────
-#define LED_PIN 2
+// ── NeoPixel RGB LED (IO38) ───────────────────────────────────────────────────
+#define RGB_PIN   38
+#define RGB_COUNT 1
+static Adafruit_NeoPixel rgb(RGB_COUNT, RGB_PIN, NEO_GRB + NEO_KHZ800);
+
+#define C_OFF     rgb.Color(0,   0,   0)
+#define C_YELLOW  rgb.Color(255, 160,  0)
+#define C_GREEN   rgb.Color(0,   220,  0)
+#define C_BLUE    rgb.Color(0,   80,  255)
+#define C_RED     rgb.Color(220,  0,   0)
+
+enum LedState : uint8_t { LED_IDLE, LED_CONNECTED, LED_FLASHING, LED_SUCCESS, LED_ERROR };
+static LedState  ledState    = LED_IDLE;
+static uint32_t  ledSuccessUntil = 0;
 
 // ── Web server ────────────────────────────────────────────────────────────────
 AsyncWebServer server(80);
@@ -266,7 +279,7 @@ static void usbLibTask(void*) {
   uint32_t evtFlags = 0;
   while (true) {
     usb_host_lib_handle_events(portMAX_DELAY, &evtFlags);
-    if (evtFlags & USB_HOST_LIB_EVENT_FLAGS_ALL_FREE) break;
+    // Don't exit on ALL_FREE — stay running to handle future device connections
   }
   usb_host_uninstall();
   vTaskDelete(nullptr);
@@ -427,7 +440,7 @@ static bool flashHex() {
   if (g.usbMode != USB_DFU) {
     setMsg("FC не в DFU режимі — затисни BOOT і підключи USB"); return false;
   }
-  File f = SPIFFS.open("/hex.hex", "r");
+  File f = FFat.open("/hex.hex", "r");
   if (!f) { setMsg("HEX файл не знайдено"); return false; }
 
   uint8_t st = dfuGetStatus();
@@ -516,7 +529,7 @@ static bool restoreDump() {
   if (g.usbMode != USB_CDC) {
     setMsg("FC не підключено — Connect your FC dodik"); return false;
   }
-  File f = SPIFFS.open("/dump.txt", "r");
+  File f = FFat.open("/dump.txt", "r");
   if (!f) { setMsg("dump не знайдено"); return false; }
 
   setMsg("Вхід в CLI...", 2);
@@ -616,7 +629,7 @@ static bool flashElrs() {
   if (g.usbMode != USB_CDC) {
     setMsg("FC не підключено — Connect your FC dodik"); return false;
   }
-  File f = SPIFFS.open("/elrs.bin", "r");
+  File f = FFat.open("/elrs.bin", "r");
   if (!f) { setMsg("ELRS bin не знайдено"); return false; }
   size_t fSize = f.size();
 
@@ -689,7 +702,13 @@ static void flashTaskFn(void* pv) {
   }
 
   addLog(ok ? "=== Готово ===" : "=== ПОМИЛКА: " + g.message + " ===");
-  if (ok) setMsg("Готово!");
+  if (ok) {
+    setMsg("Готово!");
+    ledSuccessUntil = millis() + 5000;
+    ledState = LED_SUCCESS;
+  } else {
+    ledState = LED_ERROR;
+  }
   g.flashing = false;
   flashTask  = nullptr;
   vTaskDelete(nullptr);
@@ -701,9 +720,12 @@ static File uploadFile;
 static void handleUpload(const String& path, AsyncWebServerRequest*,
                           const String& fn, size_t idx,
                           uint8_t* d, size_t l, bool final) {
-  if (!idx) { if (uploadFile) uploadFile.close(); uploadFile = SPIFFS.open(path, "w"); }
+  if (!idx) { if (uploadFile) uploadFile.close(); uploadFile = FFat.open(path, "w"); }
   if (uploadFile) uploadFile.write(d, l);
-  if (final && uploadFile) { uploadFile.close(); addLog("Файл: " + fn + " → " + path); }
+  if (final && uploadFile) {
+    uploadFile.close();
+    addLog("Файл: " + fn + " → " + path + " (" + String(FFat.freeBytes()/1024) + "KB free)");
+  }
 }
 
 // ── HTML ──────────────────────────────────────────────────────────────────────
@@ -957,10 +979,15 @@ void setup() {
   cdcRxBuf   = xRingbufferCreate(CDC_RX_BUF, RINGBUF_TYPE_BYTEBUF);
   usbMux     = xSemaphoreCreateMutex();
 
-  pinMode(LED_PIN, OUTPUT);
-  for (int i = 0; i < 6; i++) { digitalWrite(LED_PIN, i % 2); delay(100); }
+  rgb.begin();
+  rgb.setBrightness(80);
+  // Boot blink: 3x yellow
+  for (int i = 0; i < 6; i++) {
+    rgb.setPixelColor(0, i % 2 ? C_YELLOW : C_OFF);
+    rgb.show(); delay(120);
+  }
 
-  SPIFFS.begin(true);
+  FFat.begin(true, "/ffat", 10);
 
   WiFi.mode(WIFI_AP);
   WiFi.softAPConfig(IPAddress(10,0,0,1), IPAddress(10,0,0,1), IPAddress(255,255,255,0));
@@ -1060,18 +1087,48 @@ void setup() {
 
 // ── loop ──────────────────────────────────────────────────────────────────────
 static uint32_t lastBlink = 0;
-static bool     ledSt     = false;
+static bool     blinkOn   = false;
+
+static void updateLed() {
+  uint32_t now = millis();
+  uint32_t col = C_OFF;
+
+  // Sync ledState with application state
+  if (g.flashing) {
+    ledState = LED_FLASHING;
+  } else if (ledState == LED_SUCCESS && now < ledSuccessUntil) {
+    col = C_BLUE;
+    rgb.setPixelColor(0, col); rgb.show(); return;
+  } else if (ledState == LED_SUCCESS) {
+    ledState = (g.usbMode != USB_NONE) ? LED_CONNECTED : LED_IDLE;
+  } else if (ledState == LED_ERROR) {
+    col = C_RED;
+    rgb.setPixelColor(0, col); rgb.show(); return;
+  } else {
+    ledState = (g.usbMode != USB_NONE) ? LED_CONNECTED : LED_IDLE;
+  }
+
+  switch (ledState) {
+    case LED_IDLE:
+      // Yellow slow pulse: 600ms on / 600ms off
+      if (now - lastBlink > 600) { lastBlink = now; blinkOn = !blinkOn; }
+      col = blinkOn ? C_YELLOW : C_OFF;
+      break;
+    case LED_CONNECTED:
+      col = C_GREEN;  // solid green
+      break;
+    case LED_FLASHING:
+      // Green fast blink 80ms
+      if (now - lastBlink > 80) { lastBlink = now; blinkOn = !blinkOn; }
+      col = blinkOn ? C_GREEN : C_OFF;
+      break;
+    default: break;
+  }
+  rgb.setPixelColor(0, col);
+  rgb.show();
+}
 
 void loop() {
-  uint32_t now = millis();
-  if (g.flashing) {
-    if (now - lastBlink > 80) { lastBlink = now; ledSt = !ledSt; digitalWrite(LED_PIN, ledSt); }
-  } else if (g.usbMode != USB_NONE) {
-    if (now - lastBlink > 900) { lastBlink = now; ledSt = !ledSt; digitalWrite(LED_PIN, ledSt); }
-  } else {
-    static uint8_t ph = 0; static uint32_t bt = 0;
-    const uint16_t pat[] = {80, 80, 80, 700};
-    if (now - bt > pat[ph % 4]) { bt = now; ledSt = (ph % 4 < 2); digitalWrite(LED_PIN, ledSt); ph++; }
-  }
-  delay(2);
+  updateLed();
+  delay(20);
 }
