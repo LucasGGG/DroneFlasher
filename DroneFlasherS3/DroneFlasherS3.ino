@@ -1080,13 +1080,6 @@ static const uint8_t VBUS_PIN_COUNT = sizeof(VBUS_PINS);
 void setup() {
   Serial.begin(115200);
 
-  // Вмикаємо всі кандидати VBUS HIGH — правильний вмикає power-switch
-  for (uint8_t i = 0; i < VBUS_PIN_COUNT; i++) {
-    pinMode(VBUS_PINS[i], OUTPUT);
-    digitalWrite(VBUS_PINS[i], HIGH);
-  }
-  Serial.println("VBUS: all candidates HIGH");
-
   logMux   = xSemaphoreCreateMutex();
   dfuXferSem = xSemaphoreCreateBinary();
   cdcTxSem   = xSemaphoreCreateBinary();
