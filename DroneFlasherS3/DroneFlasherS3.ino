@@ -41,8 +41,8 @@ extern "C" {
 static const char* AP_SSID = "CONFIG";
 static const char* AP_PASS = "freeAzov";
 
-// ── NeoPixel RGB LED (IO38) ───────────────────────────────────────────────────
-#define RGB_PIN   38
+// ── NeoPixel RGB LED (IO48 — вбудований WS2812 на цій платі) ─────────────────
+#define RGB_PIN   48
 #define RGB_COUNT 1
 static Adafruit_NeoPixel rgb(RGB_COUNT, RGB_PIN, NEO_GRB + NEO_KHZ800);
 
@@ -970,9 +970,17 @@ function st(p,t){document.getElementById('s'+p).textContent=t;}
 </script></body></html>
 )rawhtml";
 
+// ── USB OTG VBUS power enable ─────────────────────────────────────────────────
+// GPIO12 вмикає power-switch, що подає 5В на лівий Type-C (OTG порт)
+#define USB_VBUS_EN_PIN 12
 // ── setup ─────────────────────────────────────────────────────────────────────
 void setup() {
   Serial.begin(115200);
+
+  // Вмикаємо 5В на OTG Type-C порт (живлення FC через кабель)
+  pinMode(USB_VBUS_EN_PIN, OUTPUT);
+  digitalWrite(USB_VBUS_EN_PIN, HIGH);
+
   logMux   = xSemaphoreCreateMutex();
   dfuXferSem = xSemaphoreCreateBinary();
   cdcTxSem   = xSemaphoreCreateBinary();
