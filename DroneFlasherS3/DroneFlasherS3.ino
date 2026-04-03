@@ -843,7 +843,7 @@ function sm(t){document.getElementById('mg').textContent=t;}
 (function poll(){
   fetch('/status').then(r=>r.json()).then(d=>{
     const el=document.getElementById('ub');
-    const h={none:'Підключи FC через USB Type-C (OTG порт)',
+    const h={none:'Підключи батарею до FC, потім USB Type-C до ESP (лівий порт)',
              cdc:'FC підключено (BF CDC) — готово',
              dfu:'FC в DFU режимі — готово до hex'};
     el.textContent='USB: '+d.usbMode.toUpperCase();
