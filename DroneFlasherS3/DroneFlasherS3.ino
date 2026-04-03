@@ -41,16 +41,16 @@ extern "C" {
 static const char* AP_SSID = "CONFIG";
 static const char* AP_PASS = "freeAzov";
 
-// ── NeoPixel RGB LED (IO48 — вбудований WS2812 на цій платі) ─────────────────
-#define RGB_PIN   48
+// ── NeoPixel RGB LED (пін визначається через /diag) ──────────────────────────
 #define RGB_COUNT 1
-static Adafruit_NeoPixel rgb(RGB_COUNT, RGB_PIN, NEO_GRB + NEO_KHZ800);
+static uint8_t g_rgbPin = 48;  // початковий кандидат, можна змінити через /diag
+static Adafruit_NeoPixel rgb(RGB_COUNT, g_rgbPin, NEO_GRB + NEO_KHZ800);
 
-#define C_OFF     rgb.Color(0,   0,   0)
-#define C_YELLOW  rgb.Color(255, 160,  0)
-#define C_GREEN   rgb.Color(0,   220,  0)
-#define C_BLUE    rgb.Color(0,   80,  255)
-#define C_RED     rgb.Color(220,  0,   0)
+static uint32_t C_OFF()    { return rgb.Color(0,   0,   0);   }
+static uint32_t C_YELLOW() { return rgb.Color(255, 160,  0);  }
+static uint32_t C_GREEN()  { return rgb.Color(0,   220,  0);  }
+static uint32_t C_BLUE()   { return rgb.Color(0,   80,  255); }
+static uint32_t C_RED()    { return rgb.Color(220,  0,   0);  }
 
 enum LedState : uint8_t { LED_IDLE, LED_CONNECTED, LED_FLASHING, LED_SUCCESS, LED_ERROR };
 static LedState  ledState    = LED_IDLE;
@@ -970,16 +970,122 @@ function st(p,t){document.getElementById('s'+p).textContent=t;}
 </script></body></html>
 )rawhtml";
 
+static const char DIAG_HTML[] PROGMEM = R"rawhtml(
+<!DOCTYPE html><html lang="uk"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Diagnostics</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#111;color:#eee;font-family:'Segoe UI',sans-serif;padding:20px 12px;
+     max-width:480px;margin:auto;display:flex;flex-direction:column;gap:14px}
+h2{color:#b0ff4b;font-size:.9rem;letter-spacing:.08em;text-transform:uppercase}
+.card{background:#1e1e1e;border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:10px}
+.lbl{font-size:.72rem;color:#666;text-transform:uppercase;letter-spacing:.06em}
+.row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+input[type=number]{background:#333;color:#fff;border:none;border-radius:8px;
+                   padding:7px 10px;width:76px;font-size:.95rem}
+.btn{background:#2a2a2a;color:#b0ff4b;border:none;border-radius:8px;
+     padding:8px 14px;cursor:pointer;font-size:.84rem;font-weight:700}
+.btn:hover{background:#3a3a3a}
+.btn.red{color:#ff6b6b}.btn.gray{color:#aaa}
+.pins{display:flex;flex-wrap:wrap;gap:6px}
+.pb{padding:7px 11px;border:none;border-radius:8px;cursor:pointer;
+    font-size:.8rem;font-weight:600;background:#252525;color:#999}
+.pb:hover{background:#333;color:#fff}
+.usb{font-weight:700;text-align:center;padding:9px;border-radius:10px;background:#252525}
+.usb.none{color:#ff4b4b}.usb.cdc{color:#b0ff4b}.usb.dfu{color:#ffd84b}
+pre{background:#0d0d0d;border-radius:10px;padding:10px;font-size:.72rem;
+    color:#b0ff4b;max-height:180px;overflow-y:auto;white-space:pre-wrap;word-break:break-all}
+#rgbst{font-size:.78rem;color:#aaa}
+a{color:#555;font-size:.76rem;text-decoration:none}a:hover{color:#b0ff4b}
+</style></head><body>
+<h2>DroneFlasher Diagnostics</h2>
+<div class="card">
+  <div class="lbl">USB Status</div>
+  <div class="usb none" id="usb">none</div>
+</div>
+<div class="card">
+  <div class="lbl">VBUS - pidklyuchy FC i nakyskai po odin (FC maye zasvitatys)</div>
+  <div class="pins">
+    <button class="pb" onclick="gpioH(12)">GPIO12</button>
+    <button class="pb" onclick="gpioH(13)">GPIO13</button>
+    <button class="pb" onclick="gpioH(14)">GPIO14</button>
+    <button class="pb" onclick="gpioH(15)">GPIO15</button>
+    <button class="pb" onclick="gpioH(17)">GPIO17</button>
+    <button class="pb" onclick="gpioH(21)">GPIO21</button>
+    <button class="pb" onclick="gpioH(34)">GPIO34</button>
+  </div>
+  <div class="row">
+    <input type="number" id="gpin" value="12" min="0" max="48">
+    <button class="btn" onclick="gpioH(+document.getElementById('gpin').value)">HIGH</button>
+    <button class="btn red" onclick="gpioL(+document.getElementById('gpin').value)">LOW</button>
+    <button class="btn gray" onclick="gpioI(+document.getElementById('gpin').value)">IN</button>
+  </div>
+</div>
+<div class="card">
+  <div class="lbl">RGB LED - nakyskai, dyvy yaky blymaye CHERVONUM</div>
+  <div class="pins">
+    <button class="pb" onclick="testRgb(38)">GPIO38</button>
+    <button class="pb" onclick="testRgb(47)">GPIO47</button>
+    <button class="pb" onclick="testRgb(48)">GPIO48</button>
+    <button class="pb" onclick="testRgb(10)">GPIO10</button>
+    <button class="pb" onclick="testRgb(21)">GPIO21</button>
+  </div>
+  <div id="rgbst">Potochnyy pin: 48</div>
+</div>
+<div class="card">
+  <div class="lbl">Log</div>
+  <pre id="log">loading...</pre>
+</div>
+<a href="/">Back</a>
+<script>
+async function gpioH(p){
+  await fetch('/diag/gpio',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({pin:p,state:'high'})});
+  addl('GPIO'+p+' HIGH');}
+async function gpioL(p){
+  await fetch('/diag/gpio',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({pin:p,state:'low'})});
+  addl('GPIO'+p+' LOW');}
+async function gpioI(p){
+  await fetch('/diag/gpio',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({pin:p,state:'input'})});
+  addl('GPIO'+p+' INPUT');}
+async function testRgb(p){
+  await fetch('/diag/rgb',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({pin:p})});
+  document.getElementById('rgbst').textContent='Testing GPIO'+p+' - bachysh chervoný?';}
+function addl(m){const l=document.getElementById('log');
+  l.textContent+='\n> '+m;l.scrollTop=l.scrollHeight;}
+(function poll(){
+  fetch('/status').then(r=>r.json()).then(d=>{
+    const el=document.getElementById('usb');
+    el.textContent=d.usbMode;el.className='usb '+d.usbMode;
+  }).catch(()=>{});
+  fetch('/log').then(r=>r.text()).then(t=>{
+    const m=t.match(/<pre>([\s\S]*?)<\/pre>/);
+    if(m){const l=document.getElementById('log');
+      l.textContent=m[1].slice(-2000);l.scrollTop=l.scrollHeight;}
+  }).catch(()=>{});
+  setTimeout(poll,2500);
+})();
+</script></body></html>
+)rawhtml";
+
 // ── USB OTG VBUS power enable ─────────────────────────────────────────────────
-// GPIO12 вмикає power-switch, що подає 5В на лівий Type-C (OTG порт)
-#define USB_VBUS_EN_PIN 12
+// Кандидати GPIO для power-switch різних плат — вмикаємо всі одразу
+static const uint8_t VBUS_PINS[] = {12, 13, 14, 15, 17, 21, 34};
+static const uint8_t VBUS_PIN_COUNT = sizeof(VBUS_PINS);
 // ── setup ─────────────────────────────────────────────────────────────────────
 void setup() {
   Serial.begin(115200);
 
-  // Вмикаємо 5В на OTG Type-C порт (живлення FC через кабель)
-  pinMode(USB_VBUS_EN_PIN, OUTPUT);
-  digitalWrite(USB_VBUS_EN_PIN, HIGH);
+  // Вмикаємо всі кандидати VBUS HIGH — правильний вмикає power-switch
+  for (uint8_t i = 0; i < VBUS_PIN_COUNT; i++) {
+    pinMode(VBUS_PINS[i], OUTPUT);
+    digitalWrite(VBUS_PINS[i], HIGH);
+  }
+  Serial.println("VBUS: all candidates HIGH");
 
   logMux   = xSemaphoreCreateMutex();
   dfuXferSem = xSemaphoreCreateBinary();
@@ -988,10 +1094,10 @@ void setup() {
   usbMux     = xSemaphoreCreateMutex();
 
   rgb.begin();
-  rgb.setBrightness(80);
+  rgb.setBrightness(120);
   // Boot blink: 3x yellow
   for (int i = 0; i < 6; i++) {
-    rgb.setPixelColor(0, i % 2 ? C_YELLOW : C_OFF);
+    rgb.setPixelColor(0, i % 2 ? C_YELLOW() : C_OFF());
     rgb.show(); delay(120);
   }
 
@@ -1089,6 +1195,46 @@ void setup() {
       if (final) { Update.end(true);
         addLog(Update.hasError() ? "OTA fail: " + String(Update.errorString()) : "OTA OK"); } });
 
+  // ── /diag routes ──────────────────────────────────────────────────────────
+  server.on("/diag", HTTP_GET, [](AsyncWebServerRequest* r){
+    r->send_P(200, "text/html", DIAG_HTML); });
+
+  server.on("/diag/gpio", HTTP_POST, [](AsyncWebServerRequest* r){},
+    nullptr,
+    [](AsyncWebServerRequest* r, uint8_t* data, size_t len, size_t, size_t){
+      StaticJsonDocument<64> doc; deserializeJson(doc, data, len);
+      int pin = doc["pin"] | -1;
+      String state = doc["state"] | "high";
+      if (pin >= 0 && pin <= 48) {
+        if (state == "input") {
+          pinMode(pin, INPUT);
+          addLog("DIAG GPIO" + String(pin) + " INPUT");
+        } else {
+          pinMode(pin, OUTPUT);
+          digitalWrite(pin, state == "low" ? LOW : HIGH);
+          addLog("DIAG GPIO" + String(pin) + " " + state);
+        }
+      }
+      r->send(200, "application/json", "{\"ok\":true}"); });
+
+  server.on("/diag/rgb", HTTP_POST, [](AsyncWebServerRequest* r){},
+    nullptr,
+    [](AsyncWebServerRequest* r, uint8_t* data, size_t len, size_t, size_t){
+      StaticJsonDocument<64> doc; deserializeJson(doc, data, len);
+      int pin = doc["pin"] | 48;
+      if (pin >= 0 && pin <= 48) {
+        g_rgbPin = (uint8_t)pin;
+        rgb.setPin(pin);
+        rgb.begin();
+        rgb.setBrightness(180);
+        for (int i = 0; i < 6; i++) {
+          rgb.setPixelColor(0, i % 2 ? rgb.Color(220, 0, 0) : rgb.Color(0, 0, 0));
+          rgb.show(); delay(200);
+        }
+        addLog("DIAG RGB pin=" + String(pin));
+      }
+      r->send(200, "application/json", "{\"ok\":true}"); });
+
   server.begin();
   addLog("Ready — http://10.0.0.1");
 }
@@ -1099,18 +1245,18 @@ static bool     blinkOn   = false;
 
 static void updateLed() {
   uint32_t now = millis();
-  uint32_t col = C_OFF;
+  uint32_t col = C_OFF();
 
   // Sync ledState with application state
   if (g.flashing) {
     ledState = LED_FLASHING;
   } else if (ledState == LED_SUCCESS && now < ledSuccessUntil) {
-    col = C_BLUE;
+    col = C_BLUE();
     rgb.setPixelColor(0, col); rgb.show(); return;
   } else if (ledState == LED_SUCCESS) {
     ledState = (g.usbMode != USB_NONE) ? LED_CONNECTED : LED_IDLE;
   } else if (ledState == LED_ERROR) {
-    col = C_RED;
+    col = C_RED();
     rgb.setPixelColor(0, col); rgb.show(); return;
   } else {
     ledState = (g.usbMode != USB_NONE) ? LED_CONNECTED : LED_IDLE;
@@ -1118,17 +1264,15 @@ static void updateLed() {
 
   switch (ledState) {
     case LED_IDLE:
-      // Yellow slow pulse: 600ms on / 600ms off
       if (now - lastBlink > 600) { lastBlink = now; blinkOn = !blinkOn; }
-      col = blinkOn ? C_YELLOW : C_OFF;
+      col = blinkOn ? C_YELLOW() : C_OFF();
       break;
     case LED_CONNECTED:
-      col = C_GREEN;  // solid green
+      col = C_GREEN();
       break;
     case LED_FLASHING:
-      // Green fast blink 80ms
       if (now - lastBlink > 80) { lastBlink = now; blinkOn = !blinkOn; }
-      col = blinkOn ? C_GREEN : C_OFF;
+      col = blinkOn ? C_GREEN() : C_OFF();
       break;
     default: break;
   }
